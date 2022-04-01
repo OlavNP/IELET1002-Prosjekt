@@ -1,0 +1,107 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// Internet og server ip/connection
+const char *ssid = "ruter navn";
+const char *password = "passord";
+const char *mqtt_server = "xxxxx"; // hostname -I på RPI, IP til de tilkoblede nettverket
+
+// Setter opp klienter
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Sensor data
+unsigned long previousMillis = 0;
+unsigned long currentMillis = 0;
+const int dataDelay = 500;
+const int photoPin = 35;
+float photo = 0;
+
+// Funksjoner deklarasjoner
+void callback(char *topic, byte *message, unsigned int length);
+void reconnect();
+
+void setup()
+{
+  Serial.begin(9600);
+  analogReadResolution(12);
+
+  // wifi connection setup
+  Serial.setDebugOutput(true);
+  Serial.println();
+  Serial.println();
+  Serial.println();
+
+  for (uint8_t t = 4; t > 0; t--)
+  {
+    Serial.printf("[SETUP] BOOT WAIT %d...\n", t);
+    Serial.flush();
+    delay(1000);
+  }
+
+  WiFi.begin(ssid, password); // Connect to your wi-fi modem
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Establishing connection to WiFi...");
+    delay(1000);
+  }
+
+  Serial.println("Connected");
+  Serial.println(WiFi.localIP());
+
+  // setter serveren til mqtt, RPI port
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback); // fått mld, sender funksjon topic, meldingen, meldingens lengde
+}
+
+void loop()
+{
+  // Hvis ikke kobla til, koble til funksjon
+  if (!client.connected())
+  {
+    reconnect();
+  }
+  client.loop();
+
+  currentMillis = millis();
+  if (currentMillis - previousMillis >= dataDelay)
+  {
+    previousMillis = currentMillis;
+    // Splitter verdi inn i char og sender til mqtt input
+    char tempString[8];
+    photo = (analogRead(photoPin) * 3.3) / 4095;
+    dtostrf(photo, 1, 2, tempString);
+    client.publish("esp32/output", tempString);
+    Serial.println(photo);
+  }
+}
+
+// tar inn funksjon topic, meldingen, meldingens lengde fra MQTT
+void callback(char *topic, byte *message, unsigned int length)
+{
+  // kan bare sende en char i hver mld
+  // løkke nedenfor setter sammen mld som ble sendt
+  String messageTemp;
+
+  for (int i = 0; i < length; i++)
+  {
+    messageTemp += (char)message[i];
+  }
+}
+
+// kobler esp til mqtt og riktig topic
+void reconnect()
+{
+  while (!client.connected())
+  {
+    if (client.connect("ESP8266Client"))
+    {
+      client.subscribe("esp32/output");
+    }
+    else
+    {
+      delay(5000);
+    }
+  }
+}
