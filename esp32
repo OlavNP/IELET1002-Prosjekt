@@ -1,0 +1,95 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// Internet og server ip/connection
+const char *ssid = "Emmas iPhone";
+const char *password = "123123123";
+const char *mqtt_server = "172.20.10.5";  // hostname -I på RPI, IP til de tilkoblede nettverket
+// Emmas hotspot 172.20.10.5
+
+// Setter opp klienter
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Funksjoner deklarasjoner
+void callback(char *topic, byte *message, unsigned int length);
+void reconnect();
+
+void setup()
+{
+  Serial.begin(115200);
+
+  // wifi connection setup
+  Serial.setDebugOutput(true);
+  Serial.println();
+  Serial.println();
+  Serial.println();
+
+  for (uint8_t t = 4; t > 0; t--)
+  {
+    Serial.printf("[SETUP] BOOT WAIT %d...\n", t);
+    Serial.flush();
+    delay(1000);
+  }
+
+  WiFi.begin(ssid, password); // Connect to your wi-fi modem
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Establishing connection to WiFi...");
+    delay(1000);
+  }
+
+  Serial.println("Connected");
+  Serial.println(WiFi.localIP());
+
+  // setter serveren til mqtt, RPI port
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback); // fått mld, sender funksjon topic, meldingen, meldingens lengde
+}
+
+void loop()
+{
+  // Hvis ikke kobla til, koble til funksjon
+  if(!client.connected()){
+    reconnect();
+  }
+  // Sjekker om data har kommet
+  client.loop();
+}
+
+// tar inn funksjon topic, meldingen, meldingens lengde fra MQTT
+void callback(char *topic, byte *message, unsigned int length)
+{
+  // kan bare sende en char i hver mld
+  // løkke nedenfor setter sammen mld som ble sendt
+  String messageTemp;
+
+  for (int i = 0; i < length; i++)
+  {
+    messageTemp += (char)message[i];
+  }
+
+  // hvis topic, gjør dette
+  if (String(topic) == "esp32/to_car")
+  {
+    // sender mld mottatt fra esp til zumo
+    Serial.print(messageTemp);
+  }
+}
+
+// kobler esp til mqtt og riktig topic
+void reconnect()
+{
+  while (!client.connected())
+  {
+    if (client.connect("ESP8266Client"))
+    {
+      client.subscribe("esp32/to_car");
+    }
+    else
+    {
+      delay(5000);
+    }
+  }
+}
