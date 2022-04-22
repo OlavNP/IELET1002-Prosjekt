@@ -1,0 +1,139 @@
+#include <Arduino.h>
+
+// Importerer biblioteker
+#include <Wire.h>
+#include <Zumo32U4.h>
+#include <Zumo32U4Encoders.h>
+
+// Instanser av det vi skal bruke
+Zumo32U4LineSensors lineSensors;
+Zumo32U4Motors motors;
+Zumo32U4Encoders encoders;
+Zumo32U4ButtonA buttonA;
+Zumo32U4LCD lcd;
+Zumo32U4LCD display;
+
+// linjefølger
+#define NUM_SENSORS 5
+unsigned int lineSensorValues[NUM_SENSORS];
+const uint16_t maxSpeed = 100;
+int16_t lastError = 0;
+
+// speedometer
+unsigned long lastTimeBeforeCount;
+
+void calibrateSensors()
+{
+  display.clear();
+
+  // Wait 1 second and then begin automatic sensor calibration
+  // by rotating in place to sweep the sensors over the line
+  delay(1000);
+  for (uint16_t i = 0; i < 120; i++)
+  {
+    if (i > 30 && i <= 90)
+    {
+      motors.setSpeeds(-200, 200);
+    }
+    else
+    {
+      motors.setSpeeds(200, -200);
+    }
+
+    lineSensors.calibrate();
+  }
+  motors.setSpeeds(0, 0);
+}
+
+// funksjon for speedometer
+float speedometer() {
+  float timeAfterCount = micros() - lastTimeBeforeCount;
+  float leftcount = encoders.getCountsAndResetLeft();
+  float rightcount = encoders.getCountsAndResetRight();
+  float counts = (leftcount + rightcount) / 2;
+  float lengthInMilliMeters = counts / 909.7 * 122.52211349;
+  float verdi = (lengthInMilliMeters / timeAfterCount) * 100000;
+  lastTimeBeforeCount = micros();
+  return verdi;
+}
+
+//Visning av sensorverdier på LCD skjerm
+void displayLCD () {
+  lcd.clear();
+  lcd.gotoXY(2, 0);
+  lcd.print(lineSensorValues[1] % 100);
+  lcd.gotoXY(0, 1);
+  lcd.print(lineSensorValues[0] % 100);
+  lcd.gotoXY(6, 1);
+  lcd.print(lineSensorValues[4] % 100);
+  lcd.gotoXY(5, 0);
+  lcd.print(lineSensorValues[2] % 100);
+  lcd.gotoXY(3, 1);
+  lcd.print(lineSensorValues[3] % 100);
+}
+
+void linjeFolgerSetup() {
+  // Initialiserer 5-linjefølgersensor
+  lineSensors.initFiveSensors();
+
+  // Wait for button A to be pressed and released.
+  display.clear();
+  display.print(F("Press A"));
+  display.gotoXY(0, 1);
+  display.print(F("to calib"));
+  buttonA.waitForButton();
+
+  // Kalibrerer linjefølgersensor
+  calibrateSensors();
+
+  // Play music and wait for it to finish before we start driving.
+  display.clear();
+  display.print(F("Go!"));
+}
+
+void linjeFolger() {
+  // Les linjefølgersensor
+  int16_t position = lineSensors.readLine(lineSensorValues);
+
+  // Speedometer
+  lcd.gotoXY(0, 1);
+  // lcd.print(speedometer());
+  displayLCD();
+
+  // Finn avvik, og lagre i en ny variabel kalt error
+  int16_t error = position - 2000;
+
+  // Opprett en ny variabel, med et navn som «speed_difference»
+  float Kp = 1;   // tuning konstant, P-leddet
+  float Td = 0.3 * (error - lastError); // tuning konstant, D-delen
+  int16_t speedDifference = (error * Kp) + Td;
+  lastError = error;
+
+  // Opprett to nye variabler, kalt noe som left_speed og right_speed.
+  int16_t leftSpeed = (int16_t)maxSpeed + speedDifference;
+  int16_t rightSpeed = (int16_t)maxSpeed - speedDifference;
+
+  // constrain(x, bunnverdi, toppverdi), tvinger verdien til å være 0-400
+  leftSpeed = constrain(leftSpeed, 0, (int16_t)maxSpeed);
+  rightSpeed = constrain(rightSpeed, 0, (int16_t)maxSpeed);
+
+  // Setter motorhastigheter
+  motors.setSpeeds(leftSpeed, rightSpeed);
+}
+
+void setup()
+{
+  // starter seriekommunikasjon
+  Serial.begin(9600);
+
+  // setup for linjefølger
+  linjeFolgerSetup();
+
+}
+
+void loop()
+{
+  // hvis gap (omdreininger for en "halvsirkel"), kjør fremover
+  // blindvei: kjør fremover i tid, ellers snu 180 og kjør tilbake, kjør høyre og gjør samme? om ikke, 180 (aka venstre) og gjør samme
+  linjeFolger();
+}

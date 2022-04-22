@@ -1,0 +1,211 @@
+#include <Wire.h>
+#include <Zumo32U4.h>
+
+Zumo32U4Buzzer buzzer;
+Zumo32U4ButtonA buttonA;
+Zumo32U4Motors motors;
+Zumo32U4LineSensors lineSensors;
+Zumo32U4IMU imu;
+Zumo32U4LCD display;
+
+// Funksjoner
+uint16_t readSensors();
+void lineSensorSetup();
+void turnSensorReset();
+void turnSensorUpdate();
+void turnSensorSetup();
+
+// motorhastighet
+const int motor_speed = 200;
+
+// GYRO SETUP
+// 45 graders sving.
+const int32_t turnAngle45 = 0x20000000;
+// 90 graders sving
+const int32_t turnAngle90 = turnAngle45 * 2;
+// 1 grads sving
+const int32_t turnAngle1 = (turnAngle45 + 22) / 45;
+// variabel for sving vinkel
+uint32_t turnAngle = 0;
+// turnRate is the current angular rate of the gyro, in units of
+// 0.07 degrees per second.
+int16_t turnRate;
+// gjennomsnittlig z-akse lesning fra gyroskop.
+int16_t gyroOffset;
+// gyroskopmålingstimer
+uint16_t gyroLastUpdate = 0;
+
+// LINE SETUP
+// Motor speed when turning during line sensor calibration.
+const uint16_t calibrationSpeed = 200;
+uint16_t lineSensorValues[5];
+
+void setup()
+{
+  // Initialiserer 5-linjefølgersensor
+  lineSensors.initFiveSensors();
+
+  // Wait for button A to be pressed and released.
+  display.clear();
+  display.print(F("Press A"));
+  display.gotoXY(0, 1);
+  display.print(F("to calib"));
+  buttonA.waitForButton();
+
+  // Kalibrerer gyroskop og linjefølgersensor utifra gyroskop
+  turnSensorSetup();
+  lineSensorSetup();
+
+  // Play music and wait for it to finish before we start driving.
+  display.clear();
+  display.print(F("Go!"));
+
+  buzzer.playFromProgramSpace(PSTR("!>g32>>c32"));
+}
+
+void loop()
+{
+  turnSensorReset();
+  motors.setSpeeds(motor_speed, motor_speed);
+  delay(500);
+  while (((((int32_t)turnAngle >> 16) * 360) >> 16) <= 0)
+  {
+    turnSensorUpdate();
+    display.gotoXY(0, 0);
+    display.print((((int32_t)turnAngle >> 16) * 360) >> 16);
+    display.print(F("   "));
+    motors.setSpeeds(motor_speed, 0);
+  }
+  motors.setSpeeds(motor_speed, motor_speed);
+  delay(500);
+  while (((((int32_t)turnAngle >> 16) * 360) >> 16) >= 0)
+  {
+    turnSensorUpdate();
+    display.gotoXY(0, 0);
+    display.print((((int32_t)turnAngle >> 16) * 360) >> 16);
+    display.print(F("   "));
+    motors.setSpeeds(0, motor_speed);
+  }
+}
+
+uint16_t readSensors()
+{
+  return lineSensors.readLine(lineSensorValues);
+}
+
+void lineSensorSetup()
+{
+  display.clear();
+  display.print(F("Line cal"));
+
+  // Delay so the robot does not move while the user is still
+  // touching the button.
+  delay(1000);
+
+  // We use the gyro to turn so that we don't turn more than
+  // necessary, and so that if there are issues with the gyro
+  // then you will know before actually starting the robot.
+
+  turnSensorReset();
+
+  // Turn to the left 90 degrees.
+  motors.setSpeeds(-calibrationSpeed, calibrationSpeed);
+  while ((int32_t)turnAngle < turnAngle45 * 2)
+  {
+    lineSensors.calibrate();
+    turnSensorUpdate();
+  }
+
+  // Turn to the right 90 degrees.
+  motors.setSpeeds(calibrationSpeed, -calibrationSpeed);
+  while ((int32_t)turnAngle > -turnAngle45 * 2)
+  {
+    lineSensors.calibrate();
+    turnSensorUpdate();
+  }
+
+  // Turn back to center using the gyro.
+  motors.setSpeeds(-calibrationSpeed, calibrationSpeed);
+  while ((int32_t)turnAngle < 0)
+  {
+    lineSensors.calibrate();
+    turnSensorUpdate();
+  }
+
+  // Stop the motors.
+  motors.setSpeeds(0, 0);
+}
+
+// startpunkt før måling, vinkel på 0
+void turnSensorReset()
+{
+  gyroLastUpdate = micros();
+  turnAngle = 0;
+}
+
+// leser gyroskop og goppdaterer vinkel
+void turnSensorUpdate()
+{
+  // leser målinger fra gyroskop
+  imu.readGyro();
+  turnRate = imu.g.z - gyroOffset;
+
+  // tid siden forrige måling (dt)
+  uint16_t m = micros();
+  uint16_t dt = m - gyroLastUpdate;
+  gyroLastUpdate = m;
+
+  // estimerer snuvinkel siden forrige måling
+  int32_t d = (int32_t)turnRate * dt;
+
+  // faktisk snuvinkel i grader
+  turnAngle += (int64_t)d * 14680064 / 17578125;
+}
+
+// slår på og kalibrerer gyroskopet
+void turnSensorSetup()
+{
+  Wire.begin();
+  imu.init();
+  imu.enableDefault();
+  imu.configureForTurnSensing();
+
+  display.clear();
+  display.print(F("Gyro cal"));
+
+  // lyser gult om displat ikke er tilgjengelig
+  ledYellow(1);
+
+  // pause for å gjerne finger fra knapp
+  delay(500);
+
+  // kalibrerer gyroskopet
+  int32_t total = 0;
+  for (uint16_t i = 0; i < 1024; i++)
+  {
+    // venter på data og leser data
+    while (!imu.gyroDataReady())
+    {
+    }
+    imu.readGyro();
+
+    // legger til z-akse målingen til totalen
+    total += imu.g.z;
+  }
+  ledYellow(0);
+  gyroOffset = total / 1024;
+
+  /*
+  // viser vinkelen i grader (-180, 180) til A klikkes
+  display.clear();
+  turnSensorReset();
+  while (!buttonA.getSingleDebouncedRelease())
+  {
+    turnSensorUpdate();
+    display.gotoXY(0, 0);
+    display.print((((int32_t)turnAngle >> 16) * 360) >> 16);
+    display.print(F("   "));
+  }
+  display.clear();
+  */
+}
